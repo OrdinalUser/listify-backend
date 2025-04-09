@@ -1,3 +1,4 @@
+const fs = require('fs')
 const config =  require('./config')
 const image_upload = require('./upload')
 const path = require('path')
@@ -29,28 +30,16 @@ function Auth(req, res, next)
 
     jwt.verify(token, config.JWT_SECRET, (err, decoded) => {
         if (err) return res.status(401).send({error: 'Invalid or expired token'});
-        const stmt = db.prepare('SELECT COUNT(*) AS count FROM users WHERE id = ?;');
-        const {count} = stmt.get(decoded.user_id);
-        if (count > 1) console.log(`There are multiple users with id ${decoded.user_id}`);
-        if (count == 0) return res.status(403).send({error: 'User no longer exists'});
+        const exists = db.users.exists(decoded.user_id);
+        if (!exists) return res.status(403).send({error: 'User no longer exists'});
         req.user_id =  decoded.user_id;
         req.login = decoded.login;
         next();
     });
 }
 
-function registerUser(login, hashed_password)
-{
-    const stmt = db.prepare('SELECT COUNT(*) AS count FROM users WHERE login = ?;');
-    const {count} = stmt.get(login)
-    if (count !== 0) return false;
-    
-    db.prepare('INSERT INTO users (login, password) VALUES (?, ?);').run(login, hashed_password)
-    return true;
-}
-
-app.post('/register', async (req, res) =>
-{
+// Tries to register user, fails if login is already in use
+app.post('/user/register', async (req, res) => {
     if (!req.body)
         return res.status(400).send({error: 'Invalid request'});
 
@@ -65,19 +54,19 @@ app.post('/register', async (req, res) =>
     try
     {
         const hash = await bcrypt.hash(password, config.JWT_SALTROUNDS);
-        const success = registerUser(login, hash)
-        if (success)
-            res.status(200).send("Registered successfully");
-        else
-            res.status(409).send({error: 'User already registered under that login'});
+        const user = db.users.get_user_by_login(login);
+        if (user) return res.status(409).send({error: 'User already registered under that login'});
+        db.users.insert(login, hash);
+        return res.status(200).send("Registered successfully");
     } catch (err)
     {
         console.error(err);
-        res.status(500).send({error: 'Internal server error'});
+        return res.status(500).send({error: 'Internal server error'});
     }
 });
 
-app.post('/login', async (req, res) => {
+// Tries to login user, fails with incorrect credentials and returns a login token
+app.post('/user/login', async (req, res) => {
     if (!req.body)
         return res.status(400).json({error: 'Invalid request'});
 
@@ -90,19 +79,18 @@ app.post('/login', async (req, res) => {
         return res.status(400).json({error: 'Missing password'});
 
     // Get user by login from db
-    const stmt = db.prepare('SELECT id, login, password FROM users WHERE login = ?');
-    const result = stmt.get(login)
-    if (result === undefined)
+    const user = db.users.get_user_by_login(login);
+    if (!user)
         return res.status(401).json({error: 'Invalid login details'});
     
     // Check password hash
-    const match = await bcrypt.compare(password, result.password)
+    const match = await bcrypt.compare(password, user.password)
     if (!match)
         return res.status(401).json({error: 'Invalid login details'});
     
     // Generate JWT headache
     const token = jwt.sign(
-        { user_id: result.id, login: result.login },
+        { user_id: user.id, login: user.login },
         config.JWT_SECRET,
         { expiresIn: '1h' }
     );
@@ -112,47 +100,132 @@ app.post('/login', async (req, res) => {
     });
 });
 
+// Creates new list
 app.post('/list', Auth, image_upload.upload.single('image'), image_upload.handleUploadError, (req, res) => {
     if (!req.file) return res.status(400).send({error: "Image upload failed or invalid file type"});
     const {name} = req.body
     if (!name) return res.status(400).send({error: "Missing list name"});
 
-    const stmt = db.prepare('INSERT INTO lists (owner_id, name, updated_at, image_path) VALUES (?, ?, CURRENT_TIMESTAMP, ?)')
-    const result = stmt.run(req.user_id, name, req.file.filename);
+    const result = db.lists.insert(req.user_id, name, req.file.filename)
 
-    res.status(200).send({
+    return res.status(200).send({
         owner_id: req.user_id,
         list_name: name,
         list_id: result.lastInsertRowid
     })
 });
 
-app.get('/list/:id', Auth, (req, res) => {
-    const list_id = req.params.id;
-
-    const stmt = db.prepare('SELECT * FROM lists WHERE id = ?;');
-    const list = stmt.get(list_id)
-    const uri_path = `${config.BASE_URL}${config.UPLOADS_DIR}/${list.image_path}`;
-    list.image_path = uri_path;
-    if (!list) return res.status(404).send({ error: 'List not found' });
-    res.status(200).json(list);
-});
-
+// Gets all lists that are available to user
 app.get('/list', Auth, (req, res) => {
-    const stmt = db.prepare(`
-        SELECT list.id, list.owner_id, list.name, list.updated_at, list.image_path
-        FROM shared_with
-        JOIN lists AS list ON list_id = list.id AND user_id = ?
-        UNION
-        SELECT id, owner_id, name, updated_at, image_path
-        FROM lists
-        WHERE owner_id = ?;
-    `);
-    const lists = stmt.all(req.user_id, req.user_id)
+    const lists = db.lists.get_lists_accessed_by_user(req.user_id);
     lists.forEach(element => {
         const uri_path = `${config.BASE_URL}${config.UPLOADS_DIR}/${element.image_path}`;
         element.image_path = uri_path;
     });
     if (!lists) return res.status(200).json([]);
     res.status(200).json(lists);
+});
+
+// Gets available list by ID
+app.get('/list/:id', Auth, (req, res) => {
+    const list_id = req.params.id;
+    const user_id = req.user_id;
+
+    let list;
+    try
+    {
+        list = db.lists.get_list_by_id(user_id, list_id);
+    }
+    catch (err)
+    {
+        if (err.code === 'FORBIDDEN') return res.status(403).send({error: 'Access denied'});
+        else if (err.code === 'NOT_FOUND') return res.status(500).send({error: 'List not found'});
+        console.log(err);
+        return res.status(500).send({error: 'Internal server error'});
+    }
+
+    const uri_path = `${config.BASE_URL}${config.UPLOADS_DIR}/${list.image_path}`;
+    list.image_path = uri_path;
+    return res.status(200).json(list);
+});
+
+// Deletes owned list
+app.delete('/list/:id', Auth, (req, res) => {
+    const list_id = req.params.id;
+    const has_access = db.lists.owns_list(req.user_id, list_id);
+    if (!has_access) return res.status(403).send({error: "Access denied"});
+    
+    // Make sure to delete the image file
+    const list = db.lists.get(list_id);
+    const old_image_path = path.join(config.UPLOADS_DIR_PATH, list.image_path);
+    fs.unlinkSync(old_image_path);
+    db.lists.delete(list_id);
+    return res.status(200).send({message: "Delete success"})
+});
+
+// Updates owned list
+app.patch('/list/:id', Auth, image_upload.upload.single('image'), image_upload.handleUploadError, (req, res) => {
+    const list_id = req.params.id;
+    const has_access = db.lists.owns_list(req.user_id, list_id);
+    if (!has_access) { if (req.file) fs.unlinkSync(req.file.path); return res.status(403).send({error: "Access denied"}); }
+    
+    const { name } = req.body;
+    if (!name) { if (req.file) fs.unlinkSync(req.file.path); return res.status(400).send({error: "Missing list name"}); }
+    
+    if (!req.file) return res.status(400).send({error: "Image upload failed or invalid file type"});
+    
+    // Make sure to delete the image file
+    const list = db.lists.get(list_id);
+    const old_image_path = path.join(config.UPLOADS_DIR_PATH, list.image_path);
+    fs.unlinkSync(old_image_path);
+    db.lists.update(list_id, name, req.file.filename);
+    return res.status(200).send({message: "Update success"})
+});
+
+// Gets items from accessed list
+app.get('/list/:id/items', Auth, (req, res) => {
+    const list_id = req.params.id;
+    let items;
+    try { items = db.lists.get_list_items(req.user_id, list_id); }
+    catch (err) {
+        if (err.code === 'FORBIDDEN') return res.status(403).send({error: 'Access denied'});
+        return res.status(500).send({error: 'Internal server error'});
+    }
+    return res.status(200).json(items);
+});
+
+// Inserts items into accessed list
+app.post('/list/:id/items', Auth, (req, res) => {
+    const list_id = req.params.id;
+    let items;
+    try { items = req.body.items }
+    catch (err) { return res.status(400).send({error: 'Missing items array'}); }
+    if (items.length == 0) return res.status(400).send({error: 'Missing item values'});
+    
+    // Validate each item
+    for (let i = 0; i < items.length; i++)
+    {
+        let element = items[i];
+        if (!element.name instanceof String || !element.description instanceof String || !element.count instanceof Number || Math.floor(element.count) <= 0)
+            { return res.status(400).send({error: 'Invalid item format'}); }
+        element.count = Math.floor(element.count); // Just in case
+    }
+    
+    try { db.lists.insert_items(req.user_id, list_id, items); }
+    catch (err) {
+        if (err.code === 'FORBIDDEN') return res.status(403).send({error: 'Access denied'});
+        console.log(err.message);
+        return res.status(500).send({error: 'Internal server error '});
+    }
+
+    return res.status(200).send({ message: `Inserted ${items.length} items`});
+});
+
+// Register sharing of list to auth user from share_code and return list info
+app.post('/list/import', Auth, (req, res) => {
+    const {share_code} = req.body;
+    if (!share_code) return res.status(400).send({error: "Missing share code"});
+    const list = db.lists.get_list_by_share_code(share_code);
+    db.shared_with.insert(req.user_id, list.id);
+    return res.status(200).json(list);
 });

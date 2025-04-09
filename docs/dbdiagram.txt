@@ -13,6 +13,7 @@ Table lists {
   name varchar
   updated_at timestamp
   image_path varchar
+  share_code varchar
 }
 
 Table items {
@@ -20,12 +21,14 @@ Table items {
   list_id integer
   name varchar
   description varchar
+  count integer
+  updated_at timestamp
 }
 
 Table shared_with {
   id integer [primary key]
-  list_id integer
   user_id integer
+  list_id integer
 }
 
 Ref: items.list_id > lists.id
