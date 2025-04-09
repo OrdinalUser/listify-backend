@@ -3,13 +3,14 @@ const config =  require('./config')
 const image_upload = require('./upload')
 const path = require('path')
 
-const db  = require('./db');
+const db = require('./db');
 const bcrypt = require('bcrypt');
 
 const jwt = require('jsonwebtoken')
 
 const express = require('express');
-const bodyParser = require('body-parser')
+const bodyParser = require('body-parser');
+const { timeStamp } = require('console');
 
 const app = express()
 
@@ -226,6 +227,84 @@ app.post('/list/import', Auth, (req, res) => {
     const {share_code} = req.body;
     if (!share_code) return res.status(400).send({error: "Missing share code"});
     const list = db.lists.get_list_by_share_code(share_code);
+    if (!list) return res.status(400).send({error: "Invalid share code"});
     db.shared_with.insert(req.user_id, list.id);
     return res.status(200).json(list);
 });
+
+// Returns a collection of which listsids need to be updated by the client
+// Expects { lists: [{id: list_id, updated_at: timestamp} ]
+app.post('/sync/list', Auth, (req, res) => {
+    let lists;
+    try { lists = req.body.lists }
+    catch (err) { return res.status(400).send({error: 'Missing lists array'}); }
+    if (lists.length == 0) return res.status(400).send({error: 'Missing item values'});
+
+    // Validate each lists item
+    for (let i = 0; i < lists.length; i++)
+    {
+        let element = lists[i];
+        if (!element.id instanceof Number || !element.updated_at instanceof String)
+            { return res.status(400).send({error: 'Invalid item format'}); }
+        element.id = Math.floor(element.id); // Just in case
+        // string updated_at is magical and just works.. okay, please don't abuse my API :/
+    }
+
+    // Compare timestamps
+    // User can not create lists locally so this should be doable
+    let all_lists = db.lists.get_lists_accessed_by_user(req.user_id);
+    let remote_lists = []
+    for (let index = 0; index < all_lists.length; index++) {
+        const list = all_lists[index];
+        const user_list = lists.find(element => element.list_id === list.id)
+        if (!user_list) { console.log('user missing list', list.id); remote_lists.push(list.id); }
+        else if (list.updated_at !== user_list.updated_at) { console.log(list.updated_at, user_list.updated_at); remote_lists.push(list.id); }
+    }
+    return res.status(200).json({lists: remote_lists});
+});
+
+// Expects a collection of user items which the server merges according to timestamps
+// Server returns a collection of items for client to cache
+// Expects {updated_at: list timestamp, items: [ item ]}
+// The idea is so simple, yet difficult to code.. why?
+app.post('/sync/list/:id', Auth, (req, res) => {
+    // Get API items
+    const list_id = req.params.id;
+    const { updated_at, items } = req.body;
+    if (!updated_at || !items) return res.status(400).send({error: 'Missing items array'});
+    if (items.length == 0) return res.status(400).send({error: 'Missing item values'});
+
+    // Get list
+    let list;
+    let list_items;
+    try
+    {
+        list = db.lists.get_list_by_id(req.user_id, list_id);
+        list_items = db.lists.get_list_items(req.user_id, list_id);
+    }
+    catch (err)
+    {
+        if (err.code === 'FORBIDDEN') return res.status(403).send({error: 'Access denied'});
+        else if (err.code === 'NOT_FOUND') return res.status(500).send({error: 'List not found'});
+        console.log(err);
+        return res.status(500).send({error: 'Internal server error'});
+    }
+
+    // Sync items.. yay
+    const client_items = items;
+    const server_items = list_items
+    let server_items_to_post = []
+    let server_item_ids_to_delete = []
+    let server_items_to_update = []
+    client_items.forEach(item => {
+        const server_item = server_items.find((element) => element.id === item.id);
+        if (!server_item)
+            if (item.updated_at > list.updated_at)
+                server_items_to_post.push(item); // Item doesn't exist and is newer than last known update
+            // else  Item doesn't exist, but is older than last update.. possibly checked off by someone else
+        else if (item.updated_at > server_item.updated_at)
+            server_items_to_update.push(item); // Item exists, and has been edited by client
+    });
+});
+
+// TODO: Real-time updates / syncing

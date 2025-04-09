@@ -1,10 +1,9 @@
 const config = require('./config')
 
 const Database = require('better-sqlite3');
-const { userInfo } = require('os');
-const path = require('path');
 
-const {nanoid} = require('nanoid');
+const { v4: uuidv4 } = require('uuid')
+const { nanoid } = require('nanoid');
 const db = new Database(config.DB_PATH);
 
 function db_init() {
@@ -27,7 +26,7 @@ function db_init() {
     `).run();
     db.prepare(`
         CREATE TABLE IF NOT EXISTS items (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id TEXT PRIMARY KEY,
             list_id INTEGER,
             name VARCHAR,
             description VARCHAR,
@@ -152,12 +151,14 @@ const lists = {
         };
 
         const stmt = db.prepare(`
-            INSERT INTO items (list_id, name, description, count, updated_at)
-            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            INSERT INTO items (id, list_id, name, description, count, updated_at)
+            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
         `);
         items.forEach(element => {
-            stmt.run(list_id, element.name, element.description, element.count);
+            stmt.run(uuidv4(), list_id, element.name, element.description, element.count);
         });
+        const update_stmt = db.prepare(`UPDATE lists SET updated_at = CURRENT_TIMESTAMP WHERE id = ?`);
+        update_stmt.run(list_id);
     },
     get(list_id)
     {
@@ -201,6 +202,17 @@ const shared_with = {
         const result = stmt.run(user_id, list_id);
     }
 };
+
+const items = {
+    delete_array(item_ids)
+    {
+        if (item_ids.length === 0) return;
+        // Doesn't check privileges
+        const placeholders = item_ids.map(() => '?').join(', ');
+        const stmt = db.prepare(`DELETE FROM items WHERE id IN (${placeholders})`);
+        const result = stmt.run(...items_ids); // This isn't correct, but the idea is
+    }
+}
 
 db_init();
 
