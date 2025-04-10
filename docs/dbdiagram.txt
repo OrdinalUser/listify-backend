@@ -23,6 +23,7 @@ Table items {
   description varchar
   count integer
   updated_at timestamp
+  deleted boolean
 }
 
 Table shared_with {

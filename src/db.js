@@ -31,7 +31,8 @@ function db_init() {
             name VARCHAR,
             description VARCHAR,
             count INTEGER,
-            updated_at TIMESTAMP
+            updated_at TIMESTAMP,
+            deleted BOOLEAN
         )
     `).run();
     db.prepare(`
@@ -141,21 +142,28 @@ const lists = {
         if (!items) items = []
         return items;
     },
-    insert_items(user_id, list_id, items)
+    insert_items(list_id, items)
     {
-        const has_access = lists.has_user_access_to_list(user_id, list_id);
-        if (!has_access) {
-            const err = new Error("Access denied to list");
-            err.code = 'FORBIDDEN';
-            throw err;
-        };
-
         const stmt = db.prepare(`
-            INSERT INTO items (id, list_id, name, description, count, updated_at)
-            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            INSERT INTO items (id, list_id, name, description, count, updated_at, deleted)
+            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, false)
         `);
         items.forEach(element => {
-            stmt.run(uuidv4(), list_id, element.name, element.description, element.count);
+            stmt.run(uuidv4(), list_id, element.name, element.description, element.count || 1);
+        });
+        const update_stmt = db.prepare(`UPDATE lists SET updated_at = CURRENT_TIMESTAMP WHERE id = ?`);
+        update_stmt.run(list_id);
+    },
+    insert_items_realized(list_id, items)
+    {
+        if (items.length === 0) return;
+
+        const stmt = db.prepare(`
+            INSERT INTO items (id, list_id, name, description, count, updated_at, deleted)
+            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, false)
+        `);
+        items.forEach(element => {
+            stmt.run(element.id, list_id, element.name, element.description, element.count);
         });
         const update_stmt = db.prepare(`UPDATE lists SET updated_at = CURRENT_TIMESTAMP WHERE id = ?`);
         update_stmt.run(list_id);
@@ -184,6 +192,30 @@ const lists = {
         const stmt = db.prepare(`SELECT * FROM lists WHERE share_code = ?`);
         const result = stmt.get(share_code);
         return result ? result : null
+    },
+    delete_items_by_ids(list_id, item_ids)
+    {
+        if (item_ids.length === 0) return;
+
+        const placeholders = item_ids.map(() => '?').join(', ');
+        const stmt = db.prepare(`DELETE FROM items WHERE list_id = ? AND id IN (${placeholders})`);
+        const result = stmt.run(list_id, ...item_ids);
+    },
+    update_items(list_id, items)
+    {
+        if (items.length === 0) return;
+
+        const stmt = db.prepare(`
+            UPDATE items SET name = ?, description = ?, count = ?, updated_at = ?, deleted = false WHERE list_id = ? AND id = ?
+        `);
+        items.forEach(element => {
+            stmt.run(element.name, element.description, element.count, element.updated_at, list_id, element.id);
+        });
+    },
+    update_timestamp(list_id)
+    {
+        const stmt = db.prepare(`UPDATE lists SET updated_at = CURRENT_TIMESTAMP WHERE id = ?`);
+        const result = stmt.run(list_id);
     }
 };
 
@@ -204,19 +236,12 @@ const shared_with = {
 };
 
 const items = {
-    delete_array(item_ids)
-    {
-        if (item_ids.length === 0) return;
-        // Doesn't check privileges
-        const placeholders = item_ids.map(() => '?').join(', ');
-        const stmt = db.prepare(`DELETE FROM items WHERE id IN (${placeholders})`);
-        const result = stmt.run(...items_ids); // This isn't correct, but the idea is
-    }
+    
 }
 
 db_init();
 
 module.exports = {
     db,
-    lists, users, shared_with
+    lists, users, shared_with, items
 }

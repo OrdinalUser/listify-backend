@@ -3,6 +3,8 @@ const config =  require('./config')
 const image_upload = require('./upload')
 const path = require('path')
 
+const { z } = require('zod')
+
 const db = require('./db');
 const bcrypt = require('bcrypt');
 
@@ -10,7 +12,8 @@ const jwt = require('jsonwebtoken')
 
 const express = require('express');
 const bodyParser = require('body-parser');
-const { timeStamp } = require('console');
+const { timeStamp, count } = require('console');
+const { isStringObject } = require('util/types');
 
 const app = express()
 
@@ -198,6 +201,9 @@ app.get('/list/:id/items', Auth, (req, res) => {
 // Inserts items into accessed list
 app.post('/list/:id/items', Auth, (req, res) => {
     const list_id = req.params.id;
+    const has_access = db.lists.has_user_access_to_list(req.user_id, list_id);
+    if (!has_access) return res.status(404).send({error: 'Access denied'});
+
     let items;
     try { items = req.body.items }
     catch (err) { return res.status(400).send({error: 'Missing items array'}); }
@@ -212,7 +218,7 @@ app.post('/list/:id/items', Auth, (req, res) => {
         element.count = Math.floor(element.count); // Just in case
     }
     
-    try { db.lists.insert_items(req.user_id, list_id, items); }
+    try { db.lists.insert_items(list_id, items); }
     catch (err) {
         if (err.code === 'FORBIDDEN') return res.status(403).send({error: 'Access denied'});
         console.log(err.message);
@@ -234,34 +240,33 @@ app.post('/list/import', Auth, (req, res) => {
 
 // Returns a collection of which listsids need to be updated by the client
 // Expects { lists: [{id: list_id, updated_at: timestamp} ]
-app.post('/sync/list', Auth, (req, res) => {
-    let lists;
-    try { lists = req.body.lists }
-    catch (err) { return res.status(400).send({error: 'Missing lists array'}); }
-    if (lists.length == 0) return res.status(400).send({error: 'Missing item values'});
+// This is useless...
+// app.post('/sync/list', Auth, (req, res) => {
+//     const { lists } = req.body;
+//     if (!lists || !lists instanceof Array) return res.status(400).send({error: 'Missing lists array'});
 
-    // Validate each lists item
-    for (let i = 0; i < lists.length; i++)
-    {
-        let element = lists[i];
-        if (!element.id instanceof Number || !element.updated_at instanceof String)
-            { return res.status(400).send({error: 'Invalid item format'}); }
-        element.id = Math.floor(element.id); // Just in case
-        // string updated_at is magical and just works.. okay, please don't abuse my API :/
-    }
+//     // Validate each lists item
+//     for (let i = 0; i < lists.length; i++)
+//     {
+//         let element = lists[i];
+//         if (!element.id instanceof Number || !element.updated_at instanceof String)
+//             { return res.status(400).send({error: 'Invalid item format'}); }
+//         element.id = Math.floor(element.id); // Just in case
+//         // string updated_at is magical and just works.. okay, please don't abuse my API :/
+//     }
 
-    // Compare timestamps
-    // User can not create lists locally so this should be doable
-    let all_lists = db.lists.get_lists_accessed_by_user(req.user_id);
-    let remote_lists = []
-    for (let index = 0; index < all_lists.length; index++) {
-        const list = all_lists[index];
-        const user_list = lists.find(element => element.list_id === list.id)
-        if (!user_list) { console.log('user missing list', list.id); remote_lists.push(list.id); }
-        else if (list.updated_at !== user_list.updated_at) { console.log(list.updated_at, user_list.updated_at); remote_lists.push(list.id); }
-    }
-    return res.status(200).json({lists: remote_lists});
-});
+//     // Compare timestamps
+//     // User can not create lists locally so this should be doable
+//     let all_lists = db.lists.get_lists_accessed_by_user(req.user_id);
+//     let remote_lists = []
+//     for (let index = 0; index < all_lists.length; index++) {
+//         const list = all_lists[index];
+//         const user_list = lists.find(element => element.list_id === list.id)
+//         if (!user_list) { remote_lists.push(list.id); }
+//         else if (list.updated_at != user_list.updated_at) { remote_lists.push(list.id); }
+//     }
+//     return res.status(200).json({lists: remote_lists});
+// });
 
 // Expects a collection of user items which the server merges according to timestamps
 // Server returns a collection of items for client to cache
@@ -270,11 +275,21 @@ app.post('/sync/list', Auth, (req, res) => {
 app.post('/sync/list/:id', Auth, (req, res) => {
     // Get API items
     const list_id = req.params.id;
+    const has_access = db.lists.has_user_access_to_list(req.user_id, list_id);
+    if (!has_access) return res.status(404).send({error: 'Access denied'});
+
     const { updated_at, items } = req.body;
-    if (!updated_at || !items) return res.status(400).send({error: 'Missing items array'});
-    if (items.length == 0) return res.status(400).send({error: 'Missing item values'});
+    // Validate each lists item
+    if (!updated_at || !items || !Array.isArray(items)) return res.status(400).send({error: 'Incorrect format'});
+    for (let i = 0; i < items.length; i++)
+    {
+        let element = items[i];
+        if (!validate(element, validation_schema_sync_item)) return res.status(400).send({error: 'Invalid item format'});
+        // string updated_at is magical and just works.. okay, please don't abuse my API :/
+    }
 
     // Get list
+    const client_list_updated_at = updated_at;
     let list;
     let list_items;
     try
@@ -294,17 +309,58 @@ app.post('/sync/list/:id', Auth, (req, res) => {
     const client_items = items;
     const server_items = list_items
     let server_items_to_post = []
-    let server_item_ids_to_delete = []
+    let server_items_to_delete = []
     let server_items_to_update = []
-    client_items.forEach(item => {
+    for (let index = 0; index < client_items.length; index++) {
+        const item = client_items[index];      
         const server_item = server_items.find((element) => element.id === item.id);
-        if (!server_item)
-            if (item.updated_at > list.updated_at)
-                server_items_to_post.push(item); // Item doesn't exist and is newer than last known update
-            // else  Item doesn't exist, but is older than last update.. possibly checked off by someone else
-        else if (item.updated_at > server_item.updated_at)
-            server_items_to_update.push(item); // Item exists, and has been edited by client
-    });
+
+        if (!server_item) {
+            if (item.deleted === 1)
+                continue; // Client deleted item, but it no longer exists anyways.. skip
+            else if (item.updated_at > list.updated_at)
+                server_items_to_post.push(item); // Item doesn't exist and was created by client
+            else if (item.updated_at < list.updated_at)
+                continue; // Item was already deleted by someone before
+        }
+        else {
+            if (item.deleted === 1)
+                server_items_to_delete.push(item.id) // Item was deleted by client
+            else if (item.updated_at > server_item.updated_at)
+                server_items_to_update.push(item); // Item exists, and has been edited by client
+        }
+    }
+
+    // console.log('insert new', server_items_to_post)
+    // console.log('delete', server_items_to_delete)
+    // console.log('update', server_items_to_update)
+
+    db.lists.insert_items_realized(list_id, server_items_to_post);
+    db.lists.delete_items_by_ids(list_id, server_items_to_delete);
+    db.lists.update_items(list_id, server_items_to_update);
+    db.lists.update_timestamp(list_id);
+    
+    const updated_items = db.lists.get_list_items(req.user_id, list_id);
+    
+    return res.status(200).json(updated_items);
 });
 
-// TODO: Real-time updates / syncing
+const validation_schema_sync_item = z.object({
+    id: z.string().uuid(),
+    list_id: z.number().int(),
+    name: z.string(),
+    description: z.string(),
+    count: z.number().int(),
+    updated_at: z.string().regex(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/),
+    deleted: z.number().int().min(0).max(1)
+});
+
+function validate(data, schema)
+{
+    try {
+        const validatedItem = schema.parse(data);
+        return true;
+    } catch (err) {
+        return false;
+    }
+}
