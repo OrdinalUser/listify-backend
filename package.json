@@ -6,7 +6,8 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "start": "node src/index.js",
-    "clean": "del database.db; rmdir /Q /S uploads"
+    "clean": "del database.db; rmdir /Q /S uploads",
+    "docs": "redoc-cli bundle ./docs/api-spec.yaml -o ./docs/index.html"
   },
   "keywords": [],
   "author": "",

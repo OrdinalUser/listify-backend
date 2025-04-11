@@ -1,0 +1,344 @@
+openapi: 3.0.3
+info:
+  title: Listify API
+  description: API for the listify-backend
+  version: 1.0.0
+servers:
+  - url: https://localhost:8080/
+    description: Local server running this API
+
+# Define the security scheme
+components:
+  securitySchemes:
+    authorization:
+      type: http
+      scheme: basic
+      bearerFormat: JWT
+      description: JWT token obtained from login endpoint
+
+paths:
+  /user/register:
+    post:
+      summary: Register
+      description: Attempts to register user with the provided credentials
+      operationId: userRegister
+      tags:
+        - User
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - login
+                - password
+              properties:
+                login:
+                  type: string
+                  description: User's login
+                  example: "UserName"
+                password:
+                  type: string
+                  format: password
+                  description: User's password
+                  example: "password123"
+      responses:
+        '200':
+          description: Successful registration
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    description: Server status message
+                    example: "Registered successfully"
+              examples:
+                registerResponse:
+                  value:
+                    message: "Registered successfully"
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    description: Error message detailing the reason for failure
+              examples:
+                missingCredentials:
+                  summary: Missing credentials
+                  value:
+                    error: "Missing required fields: login and/or password"
+        '409':
+          description: Login already registered
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    description: Error message detailing the reason for failure
+              examples:
+                loginExists:
+                  summary: Login of an existing user
+                  value:
+                    error: "User already registered under that login"
+  /user/login:
+    post:
+      summary: Login
+      description: Authenticates user with the provided credentials and returns a JWT token
+      operationId: userLogin
+      tags:
+        - User
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - login
+                - password
+              properties:
+                login:
+                  type: string
+                  description: User's login
+                  example: "UserName"
+                password:
+                  type: string
+                  format: password
+                  description: User's password
+                  example: "password123"
+      responses:
+        '200':
+          description: Successful login
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token:
+                    type: string
+                    description: JWT authentication token
+                    example: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+              examples:
+                loginResponse:
+                  value:
+                    token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    description: Error message detailing the reason for failure
+              examples:
+                missingCredentials:
+                  summary: Missing credentials
+                  value:
+                    error: "Missing required fields: login and/or password"
+                invalidCredentials:
+                  summary: Invalid credentials
+                  value:
+                    error: "Invalid login credentials"
+  /list:
+    get:
+      summary: Get all
+      description: Gets all lists owned or shared with authenticated user
+      operationId: getLists
+      tags:
+        - List
+      security:
+        - authorization: []
+      responses:
+        '200':
+          description: Successful retrieval
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  lists:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: integer
+                          description: Unique identifier of the list
+                          example: 1
+                        owner_id:
+                          type: integer
+                          description: ID of the list owner
+                          example: 1
+                        name:
+                          type: string
+                          description: Name of the list
+                          example: "Updated groceries"
+                        updated_at:
+                          type: string
+                          format: date-time
+                          description: Timestamp when the list was last updated
+                          example: "2025-04-11 09:04:21"
+                        image_name:
+                          type: string
+                          description: Path to the list's associated image
+                          example: "1744358644108-780232013.jpg"
+                        share_code:
+                          type: string
+                          description: Unique code for sharing the list
+                          example: "MC1CaWxQ9RESmTmZbYoNv"
+              examples:
+                listsResponse:
+                  value:
+                    lists: [
+                      {
+                        id: 1,
+                        owner_id: 1,
+                        name: "Updated groceries",
+                        updated_at: "2025-04-11 09:04:21",
+                        image_name: "1744358644108-780232013.jpg",
+                        share_code: "MC1CaWxQ9RESmTmZbYoNv"
+                      }
+                    ]
+                emptyResponse:
+                  value:
+                    lists: []
+        '401':
+          description: Unauthorized access
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    description: Error message detailing the reason for failure
+              examples:
+                invalidToken:
+                  summarty: User has an invalid security token
+                  value:
+                    error: Invalid or expired token
+                noAccess:
+                  summary: inaccessibleData
+                  value:
+                    error: "Access denied"
+        '403':
+          description: Invalid user
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    description: Error message detailing the reason for failure
+              examples:
+                userNoLongerExists:
+                  summary: User no longer exists
+                  value:
+                    error: "User no longer exists"
+  /list/{id}:
+    get:
+      summary: Get list by ID
+      description: Retrieves a specific list by its ID
+      operationId: getListById
+      tags:
+        - List
+      security:
+        - authorization: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: ID of the list to retrieve
+          schema:
+            type: integer
+            example: 2
+      responses:
+        '200':
+          description: List details
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: integer
+                    description: Unique identifier of the list
+                    example: 2
+                  owner_id:
+                    type: integer
+                    description: ID of the list owner
+                    example: 1
+                  name:
+                    type: string
+                    description: Name of the list
+                    example: "Groceries"
+                  updated_at:
+                    type: string
+                    format: date-time
+                    description: Timestamp when the list was last updated
+                    example: "2025-04-11 09:54:02"
+                  image_name:
+                    type: string
+                    description: Path to the list's associated image
+                    example: "1744365242109-55903237.jpg"
+                  share_code:
+                    type: string
+                    description: Unique code for sharing the list
+                    example: "wZaIQUiC1eg8sxkOhmuWx"
+              examples:
+                listResponse:
+                  value:
+                    id: 1
+                    owner_id: 1
+                    name: "Groceries"
+                    updated_at: "2025-04-11 09:54:02"
+                    image_name: "1744365242109-55903237.jpg"
+                    share_code: "wZaIQUiC1eg8sxkOhmuWx"
+        '401':
+          description: Unauthorized access
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    description: Error message detailing the reason for failure
+              examples:
+                invalidToken:
+                  summarty: User has an invalid security token
+                  value:
+                    error: Invalid or expired token
+                noAccess:
+                  summary: inaccessibleData
+                  value:
+                    error: "Access denied"
+        '403':
+          description: Invalid user
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    description: Error message detailing the reason for failure
+              examples:
+                userNoLongerExists:
+                  summary: User no longer exists
+                  value:
+                    error: "User no longer exists"
+  
+

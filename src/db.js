@@ -20,7 +20,7 @@ function db_init() {
             owner_id INTEGER,
             name varchar,
             updated_at TIMESTAMP,
-            image_path VARCHAR,
+            image_name VARCHAR,
             share_code VARCHAR
         )
     `).run();
@@ -31,8 +31,8 @@ function db_init() {
             name VARCHAR,
             description VARCHAR,
             count INTEGER,
-            updated_at TIMESTAMP,
-            deleted BOOLEAN
+            checked_off BOOLEAN,
+            updated_at TIMESTAMP
         )
     `).run();
     db.prepare(`
@@ -104,11 +104,11 @@ const lists = {
     get_lists_accessed_by_user(user_id)
     {
         const stmt = db.prepare(`
-            SELECT list.id, list.owner_id, list.name, list.updated_at, list.image_path, list.share_code
+            SELECT list.id, list.owner_id, list.name, list.updated_at, list.image_name, list.share_code
             FROM shared_with
             JOIN lists AS list ON list_id = list.id AND user_id = ?
             UNION
-            SELECT id, owner_id, name, updated_at, image_path, share_code
+            SELECT id, owner_id, name, updated_at, image_name, share_code
             FROM lists
             WHERE owner_id = ?;
         `);
@@ -125,7 +125,7 @@ const lists = {
             const stmt = db.prepare(`SELECT 1 FROM lists WHERE share_code = ?`)
             uniqueness = !stmt.get(share_code)
         }
-        const stmt = db.prepare('INSERT INTO lists (owner_id, name, updated_at, image_path, share_code) VALUES (?, ?, CURRENT_TIMESTAMP, ?, ?)')
+        const stmt = db.prepare('INSERT INTO lists (owner_id, name, updated_at, image_name, share_code) VALUES (?, ?, CURRENT_TIMESTAMP, ?, ?)')
         const result = stmt.run(user_id, name, filename, share_code);
         return result;
     },
@@ -145,11 +145,11 @@ const lists = {
     insert_items(list_id, items)
     {
         const stmt = db.prepare(`
-            INSERT INTO items (id, list_id, name, description, count, updated_at, deleted)
-            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, false)
+            INSERT INTO items (id, list_id, name, description, count, updated_at, checked_off)
+            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
         `);
         items.forEach(element => {
-            stmt.run(uuidv4(), list_id, element.name, element.description, element.count || 1);
+            stmt.run(uuidv4(), list_id, element.name, element.description, element.count || 1, element.checked_off || 0);
         });
         const update_stmt = db.prepare(`UPDATE lists SET updated_at = CURRENT_TIMESTAMP WHERE id = ?`);
         update_stmt.run(list_id);
@@ -159,11 +159,11 @@ const lists = {
         if (items.length === 0) return;
 
         const stmt = db.prepare(`
-            INSERT INTO items (id, list_id, name, description, count, updated_at, deleted)
-            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, false)
+            INSERT INTO items (id, list_id, name, description, count, updated_at, checked_off)
+            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
         `);
         items.forEach(element => {
-            stmt.run(element.id, list_id, element.name, element.description, element.count);
+            stmt.run(element.id, list_id, element.name, element.description, element.count, element.checked_off);
         });
         const update_stmt = db.prepare(`UPDATE lists SET updated_at = CURRENT_TIMESTAMP WHERE id = ?`);
         update_stmt.run(list_id);
@@ -175,7 +175,7 @@ const lists = {
     },
     update(list_id, name, filename)
     {
-        const stmt = db.prepare(`UPDATE lists SET name = ?, image_path = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`);
+        const stmt = db.prepare(`UPDATE lists SET name = ?, image_name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`);
         stmt.run(name, filename, list_id);
     },
     delete(list_id)
@@ -206,10 +206,10 @@ const lists = {
         if (items.length === 0) return;
 
         const stmt = db.prepare(`
-            UPDATE items SET name = ?, description = ?, count = ?, updated_at = ?, deleted = false WHERE list_id = ? AND id = ?
+            UPDATE items SET name = ?, description = ?, count = ?, updated_at = ?, checked_off = ? WHERE list_id = ? AND id = ?
         `);
         items.forEach(element => {
-            stmt.run(element.name, element.description, element.count, element.updated_at, list_id, element.id);
+            stmt.run(element.name, element.description, element.count, element.updated_at, list_id, element.checked_off, element.id);
         });
     },
     update_timestamp(list_id)
@@ -232,11 +232,41 @@ const shared_with = {
         if (exists) return;
         const stmt = db.prepare(`INSERT INTO shared_with (user_id, list_id) VALUES (?, ?)`);
         const result = stmt.run(user_id, list_id);
+    },
+    delete(user_id, list_id)
+    {
+        const stmt = db.prepare(`DELETE FROM shared_with WHERE user_id = ? AND list_id = ?`);
+        const result =  stmt.run(user_id, list_id);
+        return result;
     }
 };
 
 const items = {
-    
+    has_access(user_id, item_id) {
+        const list_id_stmt = db.prepare(`SELECT list_id FROM items WHERE id = ?`);
+        const result_list_id = list_id_stmt.get(item_id);
+        if (!result_list_id) return false; // Item doesn't exist
+        const { list_id } = result_list_id;
+
+        const list_access = lists.has_user_access_to_list(user_id, list_id);
+        if (!list_access) return false; //  Doesn't have access to list
+        return true;
+    },
+    get(item_id) {
+        const stmt = db.prepare(`SELECT * FROM items WHERE id = ?`);
+        const result = stmt.get(item_id);
+        return result;
+    },
+    update(item) {
+        const stmt = db.prepare(`UPDATE items SET name = ?, description = ?, count = ?, updated_at = ?, checked_off = ? WHERE id = ?`);
+        const result = stmt.run(item.name, item.description, item.count, item.updated_at, item.checked_off, item.id);
+        return result;
+    },
+    delete(item_id) {
+        const stmt = db.prepare(`DELETE FROM items WHERE id = ?`);
+        const result = stmt.run(item_id);
+        return result;
+    }
 }
 
 db_init();

@@ -12,18 +12,20 @@ const jwt = require('jsonwebtoken')
 
 const express = require('express');
 const bodyParser = require('body-parser');
-const { timeStamp, count } = require('console');
+const { timeStamp, count, error } = require('console');
 const { isStringObject } = require('util/types');
 
 const app = express()
 
 app.use(bodyParser.json());
 app.use('/uploads', express.static(config.UPLOADS_DIR_PATH));
+app.use('/docs', express.static('docs'))
 
 app.listen(
     config.PORT,
     () => {
-        console.log(`REST api running on ${config.BASE_URL}`);
+        console.log(`REST API running on ${config.BASE_URL}`);
+        console.log(`REST API docs served on ${config.BASE_URL}docs/`);
     }
 );
 
@@ -44,26 +46,18 @@ function Auth(req, res, next)
 
 // Tries to register user, fails if login is already in use
 app.post('/user/register', async (req, res) => {
-    if (!req.body)
-        return res.status(400).send({error: 'Invalid request'});
+    if (!req.body) return res.status(400).send({error: 'Invalid request'});
 
+    if (!validate(req.body, validation_schema_user)) return res.status(400).json({error: 'Missing required fields: login and/or password'});
     const {login, password} = req.body;
-    if (!login && !password)
-        return res.status(400).send({error: 'Missing login, password'});
-    else if (!login)
-        return res.status(400).send({error: 'Missing login'});
-    else if (!password)
-        return res.status(400).send({error: 'Missing password'});
 
-    try
-    {
+    try {
         const hash = await bcrypt.hash(password, config.JWT_SALTROUNDS);
         const user = db.users.get_user_by_login(login);
         if (user) return res.status(409).send({error: 'User already registered under that login'});
         db.users.insert(login, hash);
-        return res.status(200).send("Registered successfully");
-    } catch (err)
-    {
+        return res.status(200).send({message: "Registered successfully"});
+    } catch (err) {
         console.error(err);
         return res.status(500).send({error: 'Internal server error'});
     }
@@ -71,26 +65,18 @@ app.post('/user/register', async (req, res) => {
 
 // Tries to login user, fails with incorrect credentials and returns a login token
 app.post('/user/login', async (req, res) => {
-    if (!req.body)
-        return res.status(400).json({error: 'Invalid request'});
+    if (!req.body) return res.status(400).json({error: 'Invalid request'});
 
+    if (!validate(req.body, validation_schema_user)) return res.status(400).json({error: 'Missing required fields: login and/or password'});
     const {login, password} = req.body;
-    if (!login && !password)
-        return res.status(400).json({error: 'Missing login, password'});
-    else if (!login)
-        return res.status(400).json({error: 'Missing login'});
-    else if (!password)
-        return res.status(400).json({error: 'Missing password'});
 
     // Get user by login from db
     const user = db.users.get_user_by_login(login);
-    if (!user)
-        return res.status(401).json({error: 'Invalid login details'});
+    if (!user) return res.status(400).json({error: 'Invalid login credentials'});
     
     // Check password hash
     const match = await bcrypt.compare(password, user.password)
-    if (!match)
-        return res.status(401).json({error: 'Invalid login details'});
+    if (!match) return res.status(400).json({error: 'Invalid login credentials'});
     
     // Generate JWT headache
     const token = jwt.sign(
@@ -122,56 +108,61 @@ app.post('/list', Auth, image_upload.upload.single('image'), image_upload.handle
 // Gets all lists that are available to user
 app.get('/list', Auth, (req, res) => {
     const lists = db.lists.get_lists_accessed_by_user(req.user_id);
-    lists.forEach(element => {
-        const uri_path = `${config.BASE_URL}${config.UPLOADS_DIR}/${element.image_path}`;
-        element.image_path = uri_path;
-    });
     if (!lists) return res.status(200).json([]);
-    res.status(200).json(lists);
+    res.status(200).json({lists: lists});
 });
 
 // Gets available list by ID
 app.get('/list/:id', Auth, (req, res) => {
     const list_id = req.params.id;
-    const user_id = req.user_id;
+    const has_access = db.lists.has_user_access_to_list(req.user_id, list_id);
+    if (!has_access) return res.status(401).send({error: "Access denied"});
 
-    let list;
-    try
-    {
-        list = db.lists.get_list_by_id(user_id, list_id);
-    }
-    catch (err)
-    {
-        if (err.code === 'FORBIDDEN') return res.status(403).send({error: 'Access denied'});
-        else if (err.code === 'NOT_FOUND') return res.status(500).send({error: 'List not found'});
-        console.log(err);
-        return res.status(500).send({error: 'Internal server error'});
-    }
+    const list = db.lists.get(list_id);
 
-    const uri_path = `${config.BASE_URL}${config.UPLOADS_DIR}/${list.image_path}`;
-    list.image_path = uri_path;
     return res.status(200).json(list);
 });
 
-// Deletes owned list
+// Gets the background image file
+app.get('/list/:id/image', Auth, (req, res) => {
+    const list_id = req.params.id;
+    const has_access = db.lists.has_user_access_to_list(req.user_id, list_id);
+    if (!has_access) return res.status(401).send({error: "Access denied"});
+    
+    const list = db.lists.get(list_id);
+    const file_on_disk = path.join(config.UPLOADS_DIR_PATH, list.image_name);
+    res.status(200).sendFile(file_on_disk);
+});
+
+// Deletes owned list or unsubscribes from a shared list
 app.delete('/list/:id', Auth, (req, res) => {
     const list_id = req.params.id;
-    const has_access = db.lists.owns_list(req.user_id, list_id);
-    if (!has_access) return res.status(403).send({error: "Access denied"});
-    
-    // Make sure to delete the image file
-    const list = db.lists.get(list_id);
-    const old_image_path = path.join(config.UPLOADS_DIR_PATH, list.image_path);
-    fs.unlinkSync(old_image_path);
-    db.lists.delete(list_id);
-    return res.status(200).send({message: "Delete success"})
+    const has_access = db.lists.has_user_access_to_list(req.user_id, list_id);
+    if (!has_access) return res.status(401).send({error: "Access denied"});
+
+    const owns_list = db.lists.owns_list(req.user_id, list_id);
+    if (owns_list)
+    {
+        // Make sure to delete the image file
+        const list = db.lists.get(list_id);
+        const old_image_path = path.join(config.UPLOADS_DIR_PATH, list.image_name);
+        fs.unlinkSync(old_image_path);
+        db.lists.delete(list_id);
+        return res.status(200).send({message: "List delete success"})
+    }
+    else
+    {
+        // Subcribed client is deleting list, remove him from shared_with
+        db.shared_with.delete(req.user_id, list_id);
+        return res.status(200).send({message: "Unsubscribed from list"})
+    }
 });
 
 // Updates owned list
 app.patch('/list/:id', Auth, image_upload.upload.single('image'), image_upload.handleUploadError, (req, res) => {
     const list_id = req.params.id;
     const has_access = db.lists.owns_list(req.user_id, list_id);
-    if (!has_access) { if (req.file) fs.unlinkSync(req.file.path); return res.status(403).send({error: "Access denied"}); }
+    if (!has_access) { if (req.file) fs.unlinkSync(req.file.path); return res.status(401).send({error: "Access denied"}); }
     
     const { name } = req.body;
     if (!name) { if (req.file) fs.unlinkSync(req.file.path); return res.status(400).send({error: "Missing list name"}); }
@@ -180,7 +171,7 @@ app.patch('/list/:id', Auth, image_upload.upload.single('image'), image_upload.h
     
     // Make sure to delete the image file
     const list = db.lists.get(list_id);
-    const old_image_path = path.join(config.UPLOADS_DIR_PATH, list.image_path);
+    const old_image_path = path.join(config.UPLOADS_DIR_PATH, list.image_name);
     fs.unlinkSync(old_image_path);
     db.lists.update(list_id, name, req.file.filename);
     return res.status(200).send({message: "Update success"})
@@ -192,7 +183,7 @@ app.get('/list/:id/items', Auth, (req, res) => {
     let items;
     try { items = db.lists.get_list_items(req.user_id, list_id); }
     catch (err) {
-        if (err.code === 'FORBIDDEN') return res.status(403).send({error: 'Access denied'});
+        if (err.code === 'FORBIDDEN') return res.status(401).send({error: 'Access denied'});
         return res.status(500).send({error: 'Internal server error'});
     }
     return res.status(200).json(items);
@@ -202,7 +193,7 @@ app.get('/list/:id/items', Auth, (req, res) => {
 app.post('/list/:id/items', Auth, (req, res) => {
     const list_id = req.params.id;
     const has_access = db.lists.has_user_access_to_list(req.user_id, list_id);
-    if (!has_access) return res.status(404).send({error: 'Access denied'});
+    if (!has_access) return res.status(401).send({error: 'Access denied'});
 
     let items;
     try { items = req.body.items }
@@ -220,7 +211,7 @@ app.post('/list/:id/items', Auth, (req, res) => {
     
     try { db.lists.insert_items(list_id, items); }
     catch (err) {
-        if (err.code === 'FORBIDDEN') return res.status(403).send({error: 'Access denied'});
+        if (err.code === 'FORBIDDEN') return res.status(401).send({error: 'Access denied'});
         console.log(err.message);
         return res.status(500).send({error: 'Internal server error '});
     }
@@ -229,12 +220,13 @@ app.post('/list/:id/items', Auth, (req, res) => {
 });
 
 // Register sharing of list to auth user from share_code and return list info
-app.post('/list/import', Auth, (req, res) => {
-    const {share_code} = req.body;
-    if (!share_code) return res.status(400).send({error: "Missing share code"});
+app.post('/list/share/:code', Auth, (req, res) => {
+    const share_code = req.params.code;
     const list = db.lists.get_list_by_share_code(share_code);
     if (!list) return res.status(400).send({error: "Invalid share code"});
-    db.shared_with.insert(req.user_id, list.id);
+    const has_access = db.lists.has_user_access_to_list(req.user_id, list.id);
+    if (has_access) return res.status(403).send({error: "Cannot add shared list multiple times"})
+    if (!has_access) db.shared_with.insert(req.user_id, list.id);
     return res.status(200).json(list);
 });
 
@@ -276,7 +268,7 @@ app.post('/sync/list/:id', Auth, (req, res) => {
     // Get API items
     const list_id = req.params.id;
     const has_access = db.lists.has_user_access_to_list(req.user_id, list_id);
-    if (!has_access) return res.status(404).send({error: 'Access denied'});
+    if (!has_access) return res.status(401).send({error: 'Access denied'});
 
     const { updated_at, items } = req.body;
     // Validate each lists item
@@ -284,7 +276,7 @@ app.post('/sync/list/:id', Auth, (req, res) => {
     for (let i = 0; i < items.length; i++)
     {
         let element = items[i];
-        if (!validate(element, validation_schema_sync_item)) return res.status(400).send({error: 'Invalid item format'});
+        if (!validate(element, validation_schema_item_sync)) return res.status(400).send({error: 'Invalid item format'});
         // string updated_at is magical and just works.. okay, please don't abuse my API :/
     }
 
@@ -345,15 +337,69 @@ app.post('/sync/list/:id', Auth, (req, res) => {
     return res.status(200).json(updated_items);
 });
 
-const validation_schema_sync_item = z.object({
+// Gets the server item on individual basis
+app.get('/items/:id', Auth, (req, res) => {
+    const item_id = req.params.id;
+    const has_access = db.items.has_access(req.user_id, item_id);
+    if (!has_access) return res.status(401).send({error: 'Access denied'});
+
+
+    const result = db.items.get(item_id);
+    return res.status(200).json(result);
+});
+
+// Updates the server item on individual basis
+// Expects the full item data type
+app.patch('/items/:id', Auth, (req, res) => {
+    const item_id = req.params.id;
+    const has_access = db.items.has_access(req.user_id, item_id);
+    if (!has_access) return res.status(401).send({error: 'Access denied'});
+    const item = req.body;
+    if (!validate(item, validation_schema_item)) return res.status(400).send({error: 'Invalid format'});
+
+    const serv_item = db.items.get(item_id);
+    const result = db.items.update(item);
+    db.lists.update_timestamp(serv_item.list_id);
+    return res.status(200).send({message: "Operation successfull"});
+});
+
+// Deletes the server item on individual basis
+app.delete('/items/:id', Auth, (req, res) => {
+    const item_id = req.params.id;
+    const has_access = db.items.has_access(req.user_id, item_id);
+    if (!has_access) return res.status(401).send({error: 'Access denied'});
+
+    const serv_item = db.items.get(item_id);
+    const result = db.items.delete(item_id);
+    db.lists.update_timestamp(serv_item.list_id);
+    return res.status(200).send({message: "Operation successfull"});
+});
+
+const validation_schema_item_sync = z.object({
     id: z.string().uuid(),
     list_id: z.number().int(),
     name: z.string(),
     description: z.string(),
     count: z.number().int(),
     updated_at: z.string().regex(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/),
+    checked_off: z.number().int().min(0).max(1),
     deleted: z.number().int().min(0).max(1)
 });
+
+const validation_schema_item = z.object({
+    id: z.string().uuid(),
+    list_id: z.number().int(),
+    name: z.string(),
+    description: z.string(),
+    count: z.number().int(),
+    updated_at: z.string().regex(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/),
+    checked_off: z.number().int().min(0).max(1)
+});
+
+const validation_schema_user = z.object({
+    login: z.string(),
+    password: z.string()
+})
 
 function validate(data, schema)
 {
