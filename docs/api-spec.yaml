@@ -152,7 +152,7 @@ paths:
                     error: "Invalid login credentials"
   /list:
     get:
-      summary: Get all
+      summary: Get all available lists
       description: Gets all lists owned or shared with authenticated user
       operationId: getLists
       tags:
@@ -225,11 +225,11 @@ paths:
                     description: Error message detailing the reason for failure
               examples:
                 invalidToken:
-                  summarty: User has an invalid security token
+                  summary: User has an invalid security token
                   value:
                     error: Invalid or expired token
                 noAccess:
-                  summary: inaccessibleData
+                  summary: User doesn't have access to data
                   value:
                     error: "Access denied"
         '403':
@@ -247,6 +247,46 @@ paths:
                   summary: User no longer exists
                   value:
                     error: "User no longer exists"
+    post:
+      summary: Create list
+      tags:
+        - List
+      security:
+        - authorization: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                image:
+                  type: string
+                  format: binary
+                  description: Image file (supports .png, .jpg, .jpeg, .webp)
+              required:
+                - name
+                - image
+      responses:
+        '200':
+          description: List created successfully
+          content:
+            application/json:
+              example:
+                id: 3
+                owner_id: 2
+                name: "Groceries"
+                updated_at: "2025-04-11 15:07:04"
+                image_name: "1744384024651-256301584.jpg"
+                share_code: "-1JBT_9hExjU-f3wPc5Kq"
+        '400':
+          description: Bad request
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
   /list/{id}:
     get:
       summary: Get list by ID
@@ -318,11 +358,11 @@ paths:
                     description: Error message detailing the reason for failure
               examples:
                 invalidToken:
-                  summarty: User has an invalid security token
+                  summary: User has an invalid security token
                   value:
                     error: Invalid or expired token
                 noAccess:
-                  summary: inaccessibleData
+                  summary: User doesn't have access to data
                   value:
                     error: "Access denied"
         '403':
@@ -340,5 +380,484 @@ paths:
                   summary: User no longer exists
                   value:
                     error: "User no longer exists"
-  
-
+    delete:
+      summary: Delete list
+      tags:
+        - List
+      security:
+        - authorization: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: ID of list to delete or unsubscribe from
+          example: 12
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: List deleted or unsubscribed successfully
+          content:
+            application/json:
+              examples:
+                Deleted:
+                  value: "List deleted successfully"
+                Unsubscribed:
+                  value: "Unsubscribed from list"
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+    patch:
+      summary: Update list
+      tags:
+        - List
+      security:
+        - authorization: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: ID of the list to update
+          example: 1
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                image:
+                  type: string
+                  format: binary
+                  description: Image file (supports .png, .jpg, .jpeg, .webp)
+              required:
+                - name
+                - image
+      responses:
+        '200':
+          description: List updated successfully
+          content:
+            application/json:
+              example: "Update success"
+        '400':
+          description: Bad request (error details in the response)
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+  /list/share/{code}:
+    post:
+      get:
+      summary: Subscribe to list
+      description: Gives access to the list to authenticated user
+      operationId: subscribeList
+      tags:
+        - List
+      security:
+        - authorization: []
+      parameters:
+        - name: code
+          in: path
+          required: true
+          description: List share code
+          schema:
+            type: string
+            example: "dnGJkDZbNNKlTgQu0UKbs"
+      responses:
+        '200':
+          description: List details
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    description: Status message
+                    example: "Subscribe success"
+        '401':
+          description: Unauthorized access
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    description: Error message detailing the reason for failure
+              examples:
+                invalidToken:
+                  summary: User has an invalid security token
+                  value:
+                    error: Invalid or expired token
+                noAccess:
+                  summary: User doesn't have access to data
+                  value:
+                    error: "Access denied"
+        '403':
+          description: Invalid user
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    description: Error message detailing the reason for failure
+              examples:
+                userNoLongerExists:
+                  summary: User no longer exists
+                  value:
+                    error: "User no longer exists"
+  /item/{id}:
+    get:
+      summary: Get item
+      tags:
+        - Item
+      security:
+        - authorization: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: UUID of the list item
+          example: 1cae10a1-4d2b-4e69-b028-a032170a0a48
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Item retrieved successfully
+          content:
+            application/json:
+              example:
+                id: "1cae10a1-4d2b-4e69-b028-a032170a0a48"
+                list_id: 1
+                name: "Apples"
+                description: "Red kind"
+                count: 8
+                checked_off: 0
+                updated_at: "2025-04-11 14:41:26"
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+    delete:
+        tags:
+          - Item
+        summary: Delete item
+        security:
+          - authorization: []
+        parameters:
+          - name: id
+            in: path
+            required: true
+            description: UUID of the list item to delete
+            example: 1cae10a1-4d2b-4e69-b028-a032170a0a48
+            schema:
+              type: string
+        responses:
+          '200':
+            description: Item deleted successfully
+            content:
+              application/json:
+                example: "Operation successfull"
+          '401':
+            description: Unauthorized
+          '403':
+            description: Forbidden
+    patch:
+      summary: Update item
+      tags:
+        - Item
+      security:
+        - authorization: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: UUID of the item to update
+          example: 1cae10a1-4d2b-4e69-b028-a032170a0a48
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                id:
+                  type: string
+                  format: uuid
+                list_id:
+                  type: integer
+                name:
+                  type: string
+                description:
+                  type: string
+                count:
+                  type: integer
+                updated_at:
+                  type: string
+                  pattern: '^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$'
+                checked_off:
+                  type: integer
+                  minimum: 0
+                  maximum: 1
+              required:
+                - id
+                - list_id
+                - name
+                - description
+                - count
+                - updated_at
+            example:
+              id: "6f36f5e8-1ee1-4787-9d87-dfae387a319d"
+              list_id: 1
+              name: "Item Name"
+              description: "Description"
+              count: 12
+              updated_at: "2025-04-11 06:42:11"
+      responses:
+        '200':
+          description: Item updated successfully
+          content:
+            application/json:
+              example: "Operation successfull"
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+  /list/{id}/items:
+    get:
+      summary: Get list items
+      tags:
+        - List
+      security:
+        - authorization: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: ID of the list to fetch items for
+          example: 1
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: List items retrieved successfully
+          content:
+            application/json:
+              examples:
+                WithItems:
+                  value:
+                    items:
+                      - id: "1cae10a1-4d2b-4e69-b028-a032170a0a48"
+                        list_id: 1
+                        name: "Apples"
+                        description: "Red kind"
+                        count: 8
+                        checked_off: 0
+                        updated_at: "2025-04-11 14:41:26"
+                      - id: "473205f3-a519-4492-bf49-07deb9a8c0dc"
+                        list_id: 1
+                        name: "Banana"
+                        description: "The yellow kind"
+                        count: 2
+                        checked_off: 0
+                        updated_at: "2025-04-11 14:41:26"
+                      - id: "ee752d69-19aa-40c8-9a1e-d3e5c2c7ad88"
+                        list_id: 1
+                        name: "Chocolate 500g"
+                        description: ""
+                        count: 1
+                        checked_off: 0
+                        updated_at: "2025-04-11 14:41:26"
+                NoItems:
+                  value:
+                    items: []
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+    post:
+      summary: Add items to list
+      tags:
+        - List
+      security:
+        - authorization: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: ID of the list to add items to
+          example: 1
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      name:
+                        type: string
+                        example: "Orange"
+                      description:
+                        type: string
+                        example: "The orange kind"
+                      count:
+                        type: integer
+                        default: 1
+                      checked_off:
+                        type: integer
+                        default: 0
+                    required:
+                      - name
+                      - description
+      responses:
+        '200':
+          description: Items successfully inserted
+          content:
+            application/json:
+              example:
+                message: "Inserted 1 items"
+        '400':
+          description: Bad request (error details in the response)
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+  /list/{id}/image:
+    get:
+      summary: Get list image
+      tags:
+        - List
+      security:
+        - authorization: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: ID of the list to fetch the image for
+          example: 1
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: List image retrieved successfully
+          content:
+            image: {}
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden
+  /sync/list/{id}:
+    post:
+      summary: Sync list items
+      tags:
+        - List
+      security:
+        - authorization: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: ID of the list to synchronize
+          example: 1
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                updated_at:
+                  type: string
+                  format: date-time
+                  example: "2025-04-10 18:15:20"
+                items:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      id:
+                        type: string
+                        format: uuid
+                        example: "54ac3fea-8712-4188-b603-7ae8a92e5c71"
+                      list_id:
+                        type: integer
+                        example: 1
+                      name:
+                        type: string
+                        example: "Item A"
+                      description:
+                        type: string
+                        example: "Desc A"
+                      count:
+                        type: integer
+                        example: 3
+                      updated_at:
+                        type: string
+                        format: date-time
+                        example: "2025-04-10 18:10:20"
+                      deleted:
+                        type: integer
+                        enum:
+                          - 0
+                          - 1
+                        example: 0
+                    required:
+                      - id
+                      - list_id
+                      - name
+                      - description
+                      - count
+                      - updated_at
+                      - deleted
+      responses:
+        '200':
+          description: The state of the list after synchronization
+          content:
+            application/json:
+              example:
+                - id: "54ac3fea-8712-4188-b603-7ae8a92e5c71"
+                  list_id: 1
+                  name: "Item A"
+                  description: "Desc A"
+                  count: 3
+                  updated_at: "2025-04-10 18:15:20"
+                  deleted: 0
+                - id: "3ee4f0cc-daae-47f0-b376-e5711b62443a"
+                  list_id: 1
+                  name: "Item B"
+                  description: "Desc B"
+                  count: 1
+                  updated_at: "2025-04-10 18:10:20"
+                  deleted: 0
+                - id: "6d2c6454-3db0-45f9-b727-f6ef98f8f978"
+                  list_id: 1
+                  name: "Item C"
+                  description: "Desc C"
+                  count: 4
+                  updated_at: "2025-04-10 18:10:20"
+                  deleted: 0
+        '400':
+          description: Bad request (error details in the response)
+        '401':
+          description: Unauthorized
+        '403':
+          description: Forbidden

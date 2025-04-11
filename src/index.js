@@ -97,12 +97,9 @@ app.post('/list', Auth, image_upload.upload.single('image'), image_upload.handle
     if (!name) return res.status(400).send({error: "Missing list name"});
 
     const result = db.lists.insert(req.user_id, name, req.file.filename)
+    const list = db.lists.get(result.lastInsertRowid)
 
-    return res.status(200).send({
-        owner_id: req.user_id,
-        list_name: name,
-        list_id: result.lastInsertRowid
-    })
+    return res.status(200).json(list);
 });
 
 // Gets all lists that are available to user
@@ -148,7 +145,7 @@ app.delete('/list/:id', Auth, (req, res) => {
         const old_image_path = path.join(config.UPLOADS_DIR_PATH, list.image_name);
         fs.unlinkSync(old_image_path);
         db.lists.delete(list_id);
-        return res.status(200).send({message: "List delete success"})
+        return res.status(200).send({message: "List deleted successfully"})
     }
     else
     {
@@ -186,7 +183,7 @@ app.get('/list/:id/items', Auth, (req, res) => {
         if (err.code === 'FORBIDDEN') return res.status(401).send({error: 'Access denied'});
         return res.status(500).send({error: 'Internal server error'});
     }
-    return res.status(200).json(items);
+    return res.status(200).json({items: items});
 });
 
 // Inserts items into accessed list
@@ -218,47 +215,6 @@ app.post('/list/:id/items', Auth, (req, res) => {
 
     return res.status(200).send({ message: `Inserted ${items.length} items`});
 });
-
-// Register sharing of list to auth user from share_code and return list info
-app.post('/list/share/:code', Auth, (req, res) => {
-    const share_code = req.params.code;
-    const list = db.lists.get_list_by_share_code(share_code);
-    if (!list) return res.status(400).send({error: "Invalid share code"});
-    const has_access = db.lists.has_user_access_to_list(req.user_id, list.id);
-    if (has_access) return res.status(403).send({error: "Cannot add shared list multiple times"})
-    if (!has_access) db.shared_with.insert(req.user_id, list.id);
-    return res.status(200).json(list);
-});
-
-// Returns a collection of which listsids need to be updated by the client
-// Expects { lists: [{id: list_id, updated_at: timestamp} ]
-// This is useless...
-// app.post('/sync/list', Auth, (req, res) => {
-//     const { lists } = req.body;
-//     if (!lists || !lists instanceof Array) return res.status(400).send({error: 'Missing lists array'});
-
-//     // Validate each lists item
-//     for (let i = 0; i < lists.length; i++)
-//     {
-//         let element = lists[i];
-//         if (!element.id instanceof Number || !element.updated_at instanceof String)
-//             { return res.status(400).send({error: 'Invalid item format'}); }
-//         element.id = Math.floor(element.id); // Just in case
-//         // string updated_at is magical and just works.. okay, please don't abuse my API :/
-//     }
-
-//     // Compare timestamps
-//     // User can not create lists locally so this should be doable
-//     let all_lists = db.lists.get_lists_accessed_by_user(req.user_id);
-//     let remote_lists = []
-//     for (let index = 0; index < all_lists.length; index++) {
-//         const list = all_lists[index];
-//         const user_list = lists.find(element => element.list_id === list.id)
-//         if (!user_list) { remote_lists.push(list.id); }
-//         else if (list.updated_at != user_list.updated_at) { remote_lists.push(list.id); }
-//     }
-//     return res.status(200).json({lists: remote_lists});
-// });
 
 // Expects a collection of user items which the server merges according to timestamps
 // Server returns a collection of items for client to cache
@@ -342,7 +298,6 @@ app.get('/items/:id', Auth, (req, res) => {
     const item_id = req.params.id;
     const has_access = db.items.has_access(req.user_id, item_id);
     if (!has_access) return res.status(401).send({error: 'Access denied'});
-
 
     const result = db.items.get(item_id);
     return res.status(200).json(result);
