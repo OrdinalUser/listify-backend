@@ -22,8 +22,8 @@ Table items {
   name varchar
   description varchar
   count integer
+  checked_off boolean
   updated_at timestamp
-  deleted boolean
 }
 
 Table shared_with {

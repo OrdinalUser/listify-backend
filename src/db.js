@@ -6,6 +6,8 @@ const { v4: uuidv4 } = require('uuid')
 const { nanoid } = require('nanoid');
 const db = new Database(config.DB_PATH);
 
+let io = null; // The socket.io .. socket? where we emit change events
+
 function db_init() {
     db.prepare(`
         CREATE TABLE IF NOT EXISTS users (
@@ -53,11 +55,15 @@ const users = {
     },
     insert(login, hashed_password)
     {
-        db.prepare('INSERT INTO users (login, password) VALUES (?, ?);').run(login, hashed_password);
+        const stmt = db.prepare('INSERT INTO users (login, password) VALUES (?, ?);')
+        const result = stmt.run(login, hashed_password);
+        return result;
     },
     exists(user_id)
     {
-        return db.prepare('SELECT 1 FROM users WHERE id = ?').get(user_id) ? true : false;
+        const stmt = db.prepare('SELECT 1 FROM users WHERE id = ?');
+        const result = stmt.get(user_id) ? true : false;
+        return result;
     }
 };
 
@@ -119,8 +125,7 @@ const lists = {
     {
         let share_code;
         let uniqueness = false;
-        while (!uniqueness)
-        {
+        while (!uniqueness) {
             share_code = nanoid();
             const stmt = db.prepare(`SELECT 1 FROM lists WHERE share_code = ?`)
             uniqueness = !stmt.get(share_code)
@@ -142,46 +147,50 @@ const lists = {
         if (!items) items = []
         return items;
     },
-    insert_items(list_id, items)
+    insert_items(list_id, items_arr)
     {
-        const stmt = db.prepare(`
-            INSERT INTO items (id, list_id, name, description, count, updated_at, checked_off)
-            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
-        `);
-        items.forEach(element => {
-            stmt.run(uuidv4(), list_id, element.name, element.description, element.count || 1, element.checked_off || 0);
-        });
-        const update_stmt = db.prepare(`UPDATE lists SET updated_at = CURRENT_TIMESTAMP WHERE id = ?`);
-        update_stmt.run(list_id);
-    },
-    insert_items_realized(list_id, items)
-    {
-        if (items.length === 0) return;
+        if (items_arr.length === 0) return;
 
-        const stmt = db.prepare(`
-            INSERT INTO items (id, list_id, name, description, count, updated_at, checked_off)
-            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
-        `);
-        items.forEach(element => {
-            stmt.run(element.id, list_id, element.name, element.description, element.count, element.checked_off);
+        items_arr.forEach(item => {
+            items.insert_new(list_id, item.name, item.description, item.count || 1, item.checked_off || 0)
         });
-        const update_stmt = db.prepare(`UPDATE lists SET updated_at = CURRENT_TIMESTAMP WHERE id = ?`);
-        update_stmt.run(list_id);
+        lists.update_timestamp(list_id);
+    },
+    insert_items_realized(list_id, items_arr)
+    {
+        if (items_arr.length === 0) return;
+
+        items_arr.forEach(item => {
+            items.insert_realised(item);
+        });
+        lists.update_timestamp(list_id);
     },
     get(list_id)
     {
         const stmt = db.prepare(`SELECT * FROM lists WHERE id = ?`);
-        return stmt.get(list_id);
+        const result = stmt.get(list_id);
+        return result;
     },
     update(list_id, name, filename)
     {
         const stmt = db.prepare(`UPDATE lists SET name = ?, image_name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`);
-        stmt.run(name, filename, list_id);
+        const result = stmt.run(name, filename, list_id);
+        
+        const list = lists.get(list_id);
+        ListUpdate(list);
+        return result;
     },
     delete(list_id)
     {
+        const ref_list = lists.get(list_id);
+        
+        // This should be synced
         let stmt = db.prepare(`DELETE FROM lists WHERE id = ?`);
         stmt.run(list_id);
+        
+        ListDelete(ref_list);
+        
+        // This has no reason to be synced as this is a cascade
         stmt = db.prepare('DELETE FROM items WHERE list_id = ?');
         stmt.run(list_id);
         stmt = db.prepare(`DELETE FROM shared_with WHERE list_id = ?`);
@@ -193,23 +202,19 @@ const lists = {
         const result = stmt.get(share_code);
         return result ? result : null
     },
-    delete_items_by_ids(list_id, item_ids)
+    delete_items_by_ids(item_ids)
     {
         if (item_ids.length === 0) return;
 
-        const placeholders = item_ids.map(() => '?').join(', ');
-        const stmt = db.prepare(`DELETE FROM items WHERE list_id = ? AND id IN (${placeholders})`);
-        const result = stmt.run(list_id, ...item_ids);
+        item_ids.forEach(item_id => {
+            items.delete(item_id);
+        });
     },
-    update_items(list_id, items)
+    update_items(items_arr)
     {
-        if (items.length === 0) return;
-
-        const stmt = db.prepare(`
-            UPDATE items SET name = ?, description = ?, count = ?, updated_at = ?, checked_off = ? WHERE list_id = ? AND id = ?
-        `);
-        items.forEach(element => {
-            stmt.run(element.name, element.description, element.count, element.updated_at, list_id, element.checked_off, element.id);
+        if (items_arr.length === 0) return;
+        items_arr.forEach(item => {
+            items.update(item)
         });
     },
     update_timestamp(list_id)
@@ -258,20 +263,83 @@ const items = {
         return result;
     },
     update(item) {
-        const stmt = db.prepare(`UPDATE items SET name = ?, description = ?, count = ?, updated_at = ?, checked_off = ? WHERE id = ?`);
-        const result = stmt.run(item.name, item.description, item.count, item.updated_at, item.checked_off, item.id);
+        const stmt = db.prepare(`UPDATE items SET name = ?, description = ?, count = ?, updated_at = ?, checked_off = ?, list_id = ? WHERE id = ?`);
+        const result = stmt.run(item.name, item.description, item.count, item.updated_at, item.checked_off, item.list_id, item.id);
+
+        ItemUpdate(item);
         return result;
     },
     delete(item_id) {
+        const item = items.get(item_id)
         const stmt = db.prepare(`DELETE FROM items WHERE id = ?`);
         const result = stmt.run(item_id);
+        
+        ItemDelete(item);
+        return result;
+    },
+    insert_realised(item) {
+        const stmt = db.prepare(`
+            INSERT INTO items (id, list_id, name, description, count, updated_at, checked_off)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        `);
+        const result = stmt.run(item.id, item.list_id, item.name, item.description, item.count, item.updated_at, item.checked_off);
+
+        ItemAdd(item);
+        return result;
+    },
+    insert_new(list_id, name, description, count, checked_off) {
+        const stmt = db.prepare(`
+            INSERT INTO items (id, list_id, name, description, count, updated_at, checked_off)
+            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
+        `);
+        const uuid = uuidv4();
+        const result = stmt.run(uuid, list_id, name, description, count, checked_off);
+
+        ItemAdd(items.get(uuid));
         return result;
     }
+}
+
+/* Real-time updates */
+function setIo(socketIo)
+{
+    io = socketIo;
+}
+
+function ItemAdd(item) {
+    if (!io) return;
+    const action = {type: "add", updated_at: item.updated_at, item: item};
+    io.to(item.list_id).emit('item-update', action);
+}
+
+function ItemUpdate(item) {
+    if (!io) return;
+    const action = {type: "mod", updated_at: item.updated_at, item: item};
+    io.to(item.list_id).emit('item-update', action);
+}
+
+function ItemDelete(item) {
+    if (!io) return;
+    const action = {type: "del", updated_at: item.updated_at, item: item};
+    io.to(item.list_id).emit('item-update', action);
+}
+
+function ListUpdate(list) {
+    if (!io) return;
+    const action = {type: "mod", updated_at: list.updated_at, list_id: list.id};
+    io.to(list.id).emit('list-update', action);
+}
+
+function ListDelete(list) {
+    if (!io) return;
+    const action = {type: "del", updated_at: list.updated_at, list_id: list.id};
+    io.to(list.id).emit('list-update', action);
 }
 
 db_init();
 
 module.exports = {
     db,
-    lists, users, shared_with, items
+    lists, users, shared_with, items,
+    setIo
 }

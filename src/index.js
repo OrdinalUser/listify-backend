@@ -3,31 +3,44 @@ const config =  require('./config')
 const image_upload = require('./upload')
 const path = require('path')
 
-const { z } = require('zod')
-
 const db = require('./db');
 const bcrypt = require('bcrypt');
 
 const jwt = require('jsonwebtoken')
-
-const express = require('express');
 const bodyParser = require('body-parser');
-const { timeStamp, count, error } = require('console');
-const { isStringObject } = require('util/types');
 
+const http = require('http')
+const express = require('express');
 const app = express()
+
+const server = http.Server(app);
+const io = require('socket.io')(server);
+db.setIo(io);
 
 app.use(bodyParser.json());
 app.use('/uploads', express.static(config.UPLOADS_DIR_PATH));
 app.use('/docs', express.static('docs'))
 
-app.listen(
+server.listen(
     config.PORT,
     () => {
-        console.log(`REST API running on ${config.BASE_URL}`);
+        console.log(`REST API & socket.io running on ${config.BASE_URL}`);
         console.log(`REST API docs served on ${config.BASE_URL}docs/`);
     }
 );
+
+function AuthSocket(token)
+{
+    if (!token) return null;
+    try {
+        let user = jwt.verify(token, config.JWT_SECRET);
+        const exists = db.users.exists(user.user_id);
+        if (!exists) return null;
+        return user;
+    } catch (err) {
+        return null;
+    }
+}
 
 function Auth(req, res, next)
 {
@@ -43,6 +56,10 @@ function Auth(req, res, next)
         next();
     });
 }
+
+app.get('/sync/socket', (req, res) => {
+    return res.status(200).send({message: "Okay"});
+});
 
 // Tries to register user, fails if login is already in use
 app.post('/user/register', async (req, res) => {
@@ -206,12 +223,7 @@ app.post('/list/:id/items', Auth, (req, res) => {
         element.count = Math.floor(element.count); // Just in case
     }
     
-    try { db.lists.insert_items(list_id, items); }
-    catch (err) {
-        if (err.code === 'FORBIDDEN') return res.status(401).send({error: 'Access denied'});
-        console.log(err.message);
-        return res.status(500).send({error: 'Internal server error '});
-    }
+    db.lists.insert_items(list_id, items);
 
     return res.status(200).send({ message: `Inserted ${items.length} items`});
 });
@@ -284,8 +296,8 @@ app.post('/sync/list/:id', Auth, (req, res) => {
     // console.log('update', server_items_to_update)
 
     db.lists.insert_items_realized(list_id, server_items_to_post);
-    db.lists.delete_items_by_ids(list_id, server_items_to_delete);
-    db.lists.update_items(list_id, server_items_to_update);
+    db.lists.delete_items_by_ids(server_items_to_delete);
+    db.lists.update_items(server_items_to_update);
     db.lists.update_timestamp(list_id);
     
     const updated_items = db.lists.get_list_items(req.user_id, list_id);
@@ -330,6 +342,42 @@ app.delete('/items/:id', Auth, (req, res) => {
     return res.status(200).send({message: "Operation successfull"});
 });
 
+// Register sharing of list to auth user from share_code and return list info
+app.post('/list/subscribe/:code', Auth, (req, res) => {
+    const share_code = req.params.code;
+    const list = db.lists.get_list_by_share_code(share_code);
+    if (!list) return res.status(400).send({error: "Invalid share code"});
+    const has_access = db.lists.has_user_access_to_list(req.user_id, list.id);
+    if (has_access) return res.status(400).json({error: "Cannot subscribe to an already accessed list"});
+    db.shared_with.insert(req.user_id, list.id);
+    return res.status(200).json(list);
+});
+
+/* Real time updates */
+io.on('connection', (socket) => {
+    const auth_token = socket.handshake.auth?.token;
+    
+    const user = AuthSocket(auth_token);
+    if (!user) return socket.disconnect(true);
+    socket.emit('authenticated');
+    
+    console.log(`Client connected: `);
+    socket.on('subscribe', (list_ids) => {
+        for (const list_id of list_ids) {
+            const has_access = db.lists.has_user_access_to_list(user.user_id, list_id);
+            if (!has_access) return;
+            socket.join(list_id);
+            console.log(`Client listening to list ${list_id}`);
+        }
+    });
+
+    socket.on('disconnect', () => {
+        console.log(`Client disconnected: `);
+    });
+});
+
+/* Validation schemas */
+const { z } = require('zod')
 const validation_schema_item_sync = z.object({
     id: z.string().uuid(),
     list_id: z.number().int(),
@@ -354,10 +402,9 @@ const validation_schema_item = z.object({
 const validation_schema_user = z.object({
     login: z.string(),
     password: z.string()
-})
+});
 
-function validate(data, schema)
-{
+function validate(data, schema) {
     try {
         const validatedItem = schema.parse(data);
         return true;
@@ -365,3 +412,5 @@ function validate(data, schema)
         return false;
     }
 }
+
+module.exports = io;

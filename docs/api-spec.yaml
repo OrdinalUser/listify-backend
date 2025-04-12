@@ -450,7 +450,7 @@ paths:
           description: Unauthorized
         '403':
           description: Forbidden
-  /list/share/{code}:
+  /list/subscribe/{code}:
     post:
       get:
       summary: Subscribe to list
@@ -480,6 +480,16 @@ paths:
                     type: string
                     description: Status message
                     example: "Subscribe success"
+        '400':
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    description: Error message detailing the reason for failure
         '401':
           description: Unauthorized access
           content:
