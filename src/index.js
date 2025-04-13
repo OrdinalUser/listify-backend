@@ -29,6 +29,7 @@ server.listen(
     }
 );
 
+// Used to authenticate socket.io connections
 function AuthSocket(token)
 {
     if (!token) return null;
@@ -42,6 +43,7 @@ function AuthSocket(token)
     }
 }
 
+// Express middleware to authenticate our REST users
 function Auth(req, res, next)
 {
     const token = req.headers['authorization'];
@@ -56,10 +58,6 @@ function Auth(req, res, next)
         next();
     });
 }
-
-app.get('/sync/socket', (req, res) => {
-    return res.status(200).send({message: "Okay"});
-});
 
 // Tries to register user, fails if login is already in use
 app.post('/user/register', async (req, res) => {
@@ -232,7 +230,7 @@ app.post('/list/:id/items', Auth, (req, res) => {
 // Server returns a collection of items for client to cache
 // Expects {updated_at: list timestamp, items: [ item ]}
 // The idea is so simple, yet difficult to code.. why?
-app.post('/sync/list/:id', Auth, (req, res) => {
+app.put('/sync/list/:id', Auth, (req, res) => {
     // Get API items
     const list_id = req.params.id;
     const has_access = db.lists.has_user_access_to_list(req.user_id, list_id);

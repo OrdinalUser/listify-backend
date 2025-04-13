@@ -1,10 +1,12 @@
+// Handles image upload of lists
+
 const path = require('path')
 const config = require('./config')
 const multer = require('multer')
 
 const allowedExts = ['.png', '.jpg', '.jpeg', '.webp']
 
-const storage_image = multer.diskStorage({
+const storage = multer.diskStorage({
     destination: (req, file, cb) => {
         cb(null, `${config.UPLOADS_DIR}/`)
     },
@@ -14,6 +16,7 @@ const storage_image = multer.diskStorage({
         cb(null, uniqueName + ext);
     }
 })
+
 const imageFilter = (req, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase();
     if (!allowedExts.includes(ext))
@@ -22,11 +25,12 @@ const imageFilter = (req, file, cb) => {
 }
 
 const upload = multer({
-    storage: storage_image,
+    storage: storage,
     limits: { fileSize: config.IMAGE_MAX_SIZE },
     fileFilter: imageFilter
 });
 
+// Express middleware to deal with errors created by this module
 function handleUploadError(err, req, res, next)
 {
     if (err instanceof multer.MulterError) {
