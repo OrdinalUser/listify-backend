@@ -774,7 +774,7 @@ paths:
         '403':
           description: Forbidden
   /sync/list/{id}:
-    post:
+    put:
       summary: Sync list items
       tags:
         - List
