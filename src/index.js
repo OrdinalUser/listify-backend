@@ -215,10 +215,8 @@ app.post('/list/:id/items', Auth, (req, res) => {
     // Validate each item
     for (let i = 0; i < items.length; i++)
     {
-        let element = items[i];
-        if (!element.name instanceof String || !element.description instanceof String || !element.count instanceof Number || Math.floor(element.count) <= 0)
-            { return res.status(400).send({error: 'Invalid item format'}); }
-        element.count = Math.floor(element.count); // Just in case
+        if (!validate(items[i], validation_schema_post_items))
+            return res.status(400).send({error: 'Invalid item format'});
     }
     
     db.lists.insert_items(list_id, items);
@@ -400,6 +398,13 @@ const validation_schema_item = z.object({
 const validation_schema_user = z.object({
     login: z.string(),
     password: z.string()
+});
+
+const validation_schema_post_items = z.object({
+    name: z.string(),
+    description: z.string(),
+    count: z.number().int().default(1),
+    checked_off: z.number().int().default(0)
 });
 
 function validate(data, schema) {
