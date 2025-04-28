@@ -200,6 +200,13 @@ app.get('/list/:id/items', Auth, (req, res) => {
     }
     return res.status(200).json({items: items});
 });
+app.get('/list/:id/shared', Auth, (req, res) => {
+    const list_id = req.params.id;
+    const has_access = db.lists.has_user_access_to_list(req.user_id, list_id);
+    if (!has_access) { if (req.file) fs.unlinkSync(req.file.path); return res.status(401).send({error: "Access denied"}); }
+    let user_list = db.lists.get_users_with_access(list_id);
+    return res.status(200).json({has_access: user_list});
+});
 
 // Inserts items into accessed list
 app.post('/list/:id/items', Auth, (req, res) => {
@@ -348,6 +355,7 @@ app.post('/list/subscribe/:code', Auth, (req, res) => {
     db.shared_with.insert(req.user_id, list.id);
     return res.status(200).json(list);
 });
+
 
 /* Real time updates */
 io.on('connection', (socket) => {

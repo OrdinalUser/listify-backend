@@ -221,6 +221,15 @@ const lists = {
     {
         const stmt = db.prepare(`UPDATE lists SET updated_at = CURRENT_TIMESTAMP WHERE id = ?`);
         const result = stmt.run(list_id);
+    },
+    get_users_with_access(list_id) {
+        const stmt = db.prepare(`
+            SELECT users.id, users.login FROM lists JOIN users ON lists.owner_id = users.id WHERE lists.id = ?
+            UNION
+            SELECT users.id, users.login FROM shared_with JOIN users ON shared_with.user_id = users.id WHERE list_id = ?;
+        `);
+        const result = stmt.all(list_id, list_id);
+        return result ? result : [];
     }
 };
 
