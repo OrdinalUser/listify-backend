@@ -17,7 +17,7 @@ Table lists {
 }
 
 Table items {
-  id integer [primary key]
+  id text [primary key] [note: uuidv4]
   list_id integer
   name varchar
   description varchar

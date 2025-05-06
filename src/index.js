@@ -217,7 +217,6 @@ app.post('/list/:id/items', Auth, (req, res) => {
     let items;
     try { items = req.body.items }
     catch (err) { return res.status(400).send({error: 'Missing items array'}); }
-    if (items.length == 0) return res.status(400).send({error: 'Missing item values'});
     
     // Validate each item
     for (let i = 0; i < items.length; i++)
