@@ -317,6 +317,20 @@ app.get('/items/:id', Auth, (req, res) => {
     return res.status(200).json(result);
 });
 
+app.post('/items/:id', Auth, (req, res) => {
+    const item_id = req.params.id;
+    const item = req.body;
+    if (!validate(item, validation_schema_item)) return res.status(400).send({error: 'Invalid format'});
+    const has_access = db.lists.has_user_access_to_list(req.user_id, item.list_id);
+    if (!has_access) return res.status(401).send({error: 'Access denied'});
+
+    const serv_item = db.items.get(item_id);
+    if (serv_item) return res.status(400).send({error: "Item already exists"});
+    const result = db.items.insert_realised(item);
+    db.lists.update_timestamp(item.list_id);
+    return res.status(200).send({message: "Operation successfull"});
+});
+
 // Updates the server item on individual basis
 // Expects the full item data type
 app.patch('/items/:id', Auth, (req, res) => {
@@ -364,18 +378,18 @@ io.on('connection', (socket) => {
     if (!user) return socket.disconnect(true);
     socket.emit('authenticated');
     
-    console.log(`Client connected: `);
+    //console.log(`Client connected: `);
     socket.on('subscribe', (list_ids) => {
         for (const list_id of list_ids) {
             const has_access = db.lists.has_user_access_to_list(user.user_id, list_id);
             if (!has_access) return;
             socket.join(list_id);
-            console.log(`Client listening to list ${list_id}`);
+            //console.log(`Client listening to list ${list_id}`);
         }
     });
 
     socket.on('disconnect', () => {
-        console.log(`Client disconnected: `);
+        //console.log(`Client disconnected: `);
     });
 });
 
